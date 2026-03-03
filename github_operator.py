@@ -34,7 +34,13 @@ class GitOperator:
                 base=source_branch
             )
             print(f"[+] Success! Pull Request created at: {pr.html_url}")
-
+            
+            try:
+                pr.add_to_labels("autofix", "ai-generated")
+                print("[*] Labels 'autofix' and 'ai-generated' added to PR.")
+            except Exception as e:
+                print(f"[!] Could not add labels: {e}")
+                
         except GithubException as e:
             print(f"[-] GitHub API Error: {e}")
 
