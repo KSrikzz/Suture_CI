@@ -3,7 +3,7 @@ import time
 import ollama
 from log_parser import LogParser
 from github_operator import GitOperator
-from validator import Validator
+from validator import Validator 
 from dotenv import load_dotenv
 
 class SutureBrain:
@@ -14,8 +14,11 @@ class SutureBrain:
         self.model = "qwen2.5-coder:7b" 
         self.validator = Validator()
 
-    def ask_ai_for_fix(self, logs, source_code):
-        """The core reasoning step: Diagnoses and heals the code."""
+    def ask_ai_for_fix(self, logs, source_code, previous_error=None):
+        feedback_context = ""
+        if previous_error:
+            feedback_context = f"\n[FEEDBACK] Your previous fix failed validation with this error: {previous_error}. Please correct it."
+
         prompt = f"""
         [ROLE] You are SUTURE_CI, an autonomous self-healing agent.
         [CONTEXT] A build failed. Analyze these logs and the source code.
@@ -25,6 +28,7 @@ class SutureBrain:
 
         SOURCE CODE:
         {source_code}
+        {feedback_context}
 
         [INSTRUCTION]
         1. Identify the bug.
@@ -37,42 +41,45 @@ class SutureBrain:
     def run_healing_cycle(self, raw_logs, target_file_path):
         error_blocks = self.parser.extract_error_context(raw_logs)
         if not error_blocks:
-            print("[-] No errors detected. Nothing to heal.")
-            return
+            return        
         with open(target_file_path, "r") as f:
             original_code = f.read()
 
-        print(f"[*] Brain is analyzing crash via {self.model}...")
-        fixed_code = self.ask_ai_for_fix(error_blocks[0], original_code)
+        attempts = 0
+        max_attempts = 3
+        current_fix = None
+        last_validation_error = None
 
-        temp_fix_file = f"temp_fix_{target_file_path}"
-        with open(temp_fix_file, "w") as f:
-            f.write(fixed_code)
+        while attempts < max_attempts:
+            attempts += 1
+            print(f"[*] Attempt {attempts}/{max_attempts}: Analyzing crash...")
+            
+            current_fix = self.ask_ai_for_fix(error_blocks[0], original_code, last_validation_error)
 
-        if not self.validator.check_syntax(temp_fix_file):
-            print("[!] AI generated a fix with syntax errors. Aborting PR.")
-            if os.path.exists(temp_fix_file):
-                os.remove(temp_fix_file)
-            return
+            temp_file = f"temp_{target_file_path}"
+            with open(temp_file, "w") as f:
+                f.write(current_fix)
 
-        print("[+] Fix validated locally. Proceeding to GitHub...")
-        if os.path.exists(temp_fix_file):
-            os.remove(temp_fix_file)
-
+            is_valid, error_msg = self.validator.check_syntax_with_feedback(temp_file)
+            
+            if is_valid:
+                print(f"[+] Success on attempt {attempts}!")
+                os.remove(temp_file)
+                break
+            else:
+                print(f"[!] Validation failed. Retrying...")
+                last_validation_error = error_msg
+                os.remove(temp_file)
+                if attempts == max_attempts:
+                    print("[-] Failed to heal after max attempts. Aborting.")
+                    return
         timestamp = int(time.time())
         unique_branch = f"suture/fix-{timestamp}"
-
-        print(f"[*] Hands are opening the Pull Request on branch: {unique_branch}")
         self.git.create_fix_pr(
             branch_name=unique_branch,
             file_path=target_file_path,
-            new_content=fixed_code,
-            commit_message="fix: autonomous repair of detected crash",
-            pr_title=f"🤖 Suture_CI: Automated Repair({timestamp})",
-            pr_body="This PR was generated automatically by Suture_CI after detecting an error in the logs."
+            new_content=current_fix,
+            commit_message=f"fix: autonomous repair of detected crash(attempt {attempts})",
+            pr_title=f"🤖 Suture_CI: Automated Repair ({timestamp})",
+            pr_body=f"Suture_CI successfully healed the crash on attempt {attempts}."
         )
-
-if __name__ == "__main__":
-    DUMMY_LOGS = "ERROR: Payment processing failed\nTraceback...\nConnectionError: Timeout"
-    brain = SutureBrain()
-    brain.run_healing_cycle(DUMMY_LOGS, "target_file.txt")

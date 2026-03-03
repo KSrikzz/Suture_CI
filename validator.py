@@ -29,3 +29,10 @@ class Validator:
             return True
         except (subprocess.CalledProcessError, FileNotFoundError):
             return False
+        
+    def check_syntax_with_feedback(self, file_path):
+        try:
+            subprocess.run(["python", "-m", "py_compile", file_path], capture_output=True, text=True, check=True)
+            return True, None
+        except subprocess.CalledProcessError as e:
+            return False, e.stderr
