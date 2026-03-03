@@ -3,6 +3,7 @@ import time
 import ollama
 from log_parser import LogParser
 from github_operator import GitOperator
+from validator import Validator
 from dotenv import load_dotenv
 
 class SutureBrain:
@@ -10,7 +11,8 @@ class SutureBrain:
         load_dotenv()
         self.parser = LogParser()
         self.git = GitOperator(os.getenv("GITHUB_TOKEN"), os.getenv("GITHUB_REPO"))
-        self.model = "qwen2.5-coder:7b" #
+        self.model = "qwen2.5-coder:7b" 
+        self.validator = Validator()
 
     def ask_ai_for_fix(self, logs, source_code):
         """The core reasoning step: Diagnoses and heals the code."""
@@ -42,6 +44,20 @@ class SutureBrain:
 
         print(f"[*] Brain is analyzing crash via {self.model}...")
         fixed_code = self.ask_ai_for_fix(error_blocks[0], original_code)
+
+        temp_fix_file = f"temp_fix_{target_file_path}"
+        with open(temp_fix_file, "w") as f:
+            f.write(fixed_code)
+
+        if not self.validator.check_syntax(temp_fix_file):
+            print("[!] AI generated a fix with syntax errors. Aborting PR.")
+            if os.path.exists(temp_fix_file):
+                os.remove(temp_fix_file)
+            return
+
+        print("[+] Fix validated locally. Proceeding to GitHub...")
+        if os.path.exists(temp_fix_file):
+            os.remove(temp_fix_file)
 
         timestamp = int(time.time())
         unique_branch = f"suture/fix-{timestamp}"
